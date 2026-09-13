@@ -47,7 +47,8 @@ the linked Obsidian vault notes for the user-facing side of each story.
 
 - **Upstream base:** `23a06766d248c4d208f17b4ca3bf50ce2d01b131` (`main` at
   the commit this branch forked from).
-- **PR:** (pending — opened by the controller after this task)
+- **PR:** [bsips/NeMo-Speech.cpp#2](https://github.com/bsips/NeMo-Speech.cpp/pull/2),
+  merged as `b376bf0`.
 - **Files:** `src/asr/diar/diar_pipeline.{h,cpp}`, `src/asr/recognizer.{h,cpp}`,
   `server/http/http_server.cpp`, `tests/cpp/asr/test_diar_speaker_change.cpp` (new),
   `tests/cpp/asr/test_diar_recognizer.cpp`, `tests/cpp/asr/CMakeLists.txt`,
