@@ -42,3 +42,38 @@ the linked Obsidian vault notes for the user-facing side of each story.
   `NeMoSpeech`'s project notes (see companion link above).
 - **Upstreaming status:** not yet proposed to `NVIDIA/NeMo-Speech.cpp`. This
   fork stays ahead of upstream on this fix until/unless that happens.
+
+### 2026-09-13 — Live speaker-change event on the realtime WebSocket
+
+- **Upstream base:** `23a06766d248c4d208f17b4ca3bf50ce2d01b131` (`main` at
+  the commit this branch forked from).
+- **PR:** (pending — opened by the controller after this task)
+- **Files:** `src/asr/diar/diar_pipeline.{h,cpp}`, `src/asr/recognizer.{h,cpp}`,
+  `server/http/http_server.cpp`, `tests/cpp/asr/test_diar_speaker_change.cpp` (new),
+  `tests/cpp/asr/test_diar_recognizer.cpp`, `tests/cpp/asr/CMakeLists.txt`,
+  `tests/integration/http_conformance_test.py`,
+  `docs/superpowers/specs/2026-09-13-live-speaker-change-event-design.md` (new),
+  `docs/superpowers/plans/2026-09-13-live-speaker-change-event.md` (new).
+- **What:** `/v1/audio/transcriptions/realtime` only reported diarization
+  results as word-level speaker tags on `.completed` events -- i.e. only once
+  a client sent `input_audio_buffer.commit`. `NemoSpeech`'s client-side
+  silence-based segmentation could therefore go up to 15s without
+  finalizing during continuous speech, since there was no way to know a
+  speaker change had happened sooner. Added a new, additive
+  `conversation.item.speaker_diarization.changed` event, built on
+  `DiarStream::segments()`'s existing incremental, hysteresis-cleaned
+  segment tracking, so a client can commit immediately on a real speaker
+  change instead.
+- **Fix:** see `docs/superpowers/specs/2026-09-13-live-speaker-change-event-design.md`
+  for the full design.
+- **Verified against:** the pure `detect_speaker_change`/`SpeakerChangeTracker`
+  logic is unit-tested end to end in
+  `tests/cpp/asr/test_diar_speaker_change.cpp` (synthetic segments, no model
+  needed). The event's JSON schema, `--diar-model` gating, and the critical
+  0-based-to-1-based `+1` conversion were verified end-to-end against a real
+  running server (observed `"speaker": N` correctly on the wire). A genuine
+  mid-stream speaker transition was **not** verified against real audio,
+  because no multi-speaker fixture is available in either this repo or the
+  companion `NeMoSpeech` project (confirmed via md5sum: all committed wavs
+  are byte-identical duplicates).
+- **Upstreaming status:** not yet proposed to `NVIDIA/NeMo-Speech.cpp`.

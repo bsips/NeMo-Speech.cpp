@@ -381,6 +381,13 @@ RecognitionStream::force_endpoint() {
     runner_->force_eou();
 }
 
+std::optional<DiarSpeakerChange>
+RecognitionStream::poll_speaker_change() {
+    if (!diar_)
+        return std::nullopt;
+    return speaker_change_tracker_.observe(diar_->segments());
+}
+
 Result
 RecognitionStream::build_result_(const StreamingUpdate& u, bool is_final) const {
     Result r;

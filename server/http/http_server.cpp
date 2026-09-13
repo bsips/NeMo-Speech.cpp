@@ -1093,6 +1093,14 @@ struct Server::Impl {
                     if (!result->is_final)
                         break;
                 }
+                if (auto change = stream->poll_speaker_change()) {
+                    Value changed(Value::Object{});
+                    changed["type"] = "conversation.item.speaker_diarization.changed";
+                    changed["speaker"] = change->speaker + 1;  // wire convention is 1-based
+                    changed["start_time"] = change->start_time;
+                    if (!send(std::move(changed)))
+                        return false;
+                }
                 return true;
             };
             Value created(Value::Object{});
@@ -1166,6 +1174,10 @@ struct Server::Impl {
                         ensure_stream();
                         if (!emit(stream->finish()))
                             break;
+                        // poll_speaker_change() is deliberately not called after finish():
+                        // any speaker change confirmed only in the flushed tail goes
+                        // unreported by this event, but is still captured correctly by
+                        // the completed event's own word-level speaker tags above.
                         stream.reset();
                         audio_bytes = 0;
                         Value committed(Value::Object{});

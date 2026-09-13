@@ -299,6 +299,17 @@ DiarStream::speaker_for_word_time(double t0, double t1) const {
     return speaker_for_frames(f0, std::min(f1, f0 + 2));
 }
 
+std::optional<DiarSpeakerChange>
+nemo_speech::asr::detect_speaker_change(
+    const std::vector<DiarSegment>& segments, std::optional<int> last_reported) {
+    if (segments.empty())
+        return std::nullopt;
+    const DiarSegment& latest = segments.back();
+    if (last_reported.has_value() && *last_reported == latest.speaker)
+        return std::nullopt;
+    return DiarSpeakerChange{latest.speaker, latest.t0};
+}
+
 std::vector<DiarSegment>
 nemo_speech::asr::diar_segments_from_probs(
     const float* probs, int64_t n_frames, int n_spk, double sec_per_frame,
@@ -338,7 +349,10 @@ nemo_speech::asr::diar_segments_from_probs(
             if (sg.second - sg.first >= cfg.min_duration_on)
                 out.push_back({sg.first, sg.second, s});
     }
-    std::sort(out.begin(), out.end(), [](const DiarSegment& a, const DiarSegment& b) {
+    // stable_sort: two segments can share an identical t0 (padding can clamp
+    // multiple speakers' segment starts to 0.0 at stream start), and their
+    // relative order should stay deterministic run to run.
+    std::stable_sort(out.begin(), out.end(), [](const DiarSegment& a, const DiarSegment& b) {
         return a.t0 < b.t0;
     });
     return out;

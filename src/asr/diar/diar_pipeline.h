@@ -12,6 +12,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -127,6 +128,55 @@ std::vector<DiarSegment> diar_segments_from_probs(
 int speaker_for_frame_range(
     const std::vector<float>& probs, int64_t probs_base, int n_spk, double sec_per_frame,
     const std::vector<DiarSegment>& frozen, int64_t start_frame, int64_t end_frame);
+
+// Speaker-change detection for the realtime WebSocket handler
+// (conversation.item.speaker_diarization.changed): compares the most
+// recent confirmed segment's speaker against `last_reported` (nullopt if
+// nothing has been reported yet for this stream) and returns the new
+// speaker + that segment's start time iff they differ. `segments` must be
+// sorted ascending by t0 (DiarStream::segments() already guarantees this).
+// Both `last_reported` and the returned `speaker` are 0-based, matching
+// DiarSegment::speaker -- callers convert to the wire's 1-based convention
+// themselves (see http_server.cpp's existing `segment.speaker + 1`).
+struct DiarSpeakerChange {
+    int speaker;
+    double start_time;
+};
+std::optional<DiarSpeakerChange> detect_speaker_change(
+    const std::vector<DiarSegment>& segments, std::optional<int> last_reported);
+
+// Wraps detect_speaker_change() with a policy the pure comparison alone
+// can't express: a fresh stream's first confirmed segment is a baseline,
+// not a "change" -- there's no genuine prior speaker for it to differ
+// from, and firing on it anyway causes the realtime WS handler's client
+// (which commits immediately on receiving a change) to enter a
+// self-sustaining commit loop every time RecognitionStream is recreated
+// (e.g. after every commit). Only a genuine subsequent transition is
+// reported.
+//
+// Known limitation (not fixed here): segments are sorted by start time
+// (t0), so the "most recent" segment is the latest-*starting* one, not
+// necessarily the currently-active speaker. Sortformer's sigmoid output
+// allows genuinely overlapping segments, so a brief interjection can
+// "stick" as the latest segment even after the original speaker resumes
+// and keeps talking, until the original speaker's next pause starts a
+// fresh segment. A proper fix would resolve the active speaker via
+// DiarStream::speaker_for_frames()'s frontier-lookup instead of
+// segments().back() -- deserves its own dedicated pass.
+class SpeakerChangeTracker {
+   public:
+    std::optional<DiarSpeakerChange> observe(const std::vector<DiarSegment>& segments) {
+        const bool had_baseline = last_reported_.has_value();
+        auto change = detect_speaker_change(segments, last_reported_);
+        if (!change)
+            return std::nullopt;
+        last_reported_ = change->speaker;
+        return had_baseline ? change : std::nullopt;
+    }
+
+   private:
+    std::optional<int> last_reported_;
+};
 
 // Per-stream streaming state + timeline.
 class DiarStream {
