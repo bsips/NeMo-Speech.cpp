@@ -82,7 +82,7 @@ the linked Obsidian vault notes for the user-facing side of each story.
 ### 2026-09-13 — Persistent diarizer identity across realtime commits
 
 - **Upstream base:** `86e555d728539fc48939fdc014abde21925e2260`
-- **PR:** (pending — opened by the controller after this task)
+- **PR:** [bsips/NeMo-Speech.cpp#3](https://github.com/bsips/NeMo-Speech.cpp/pull/3)
 - **Files:** `src/asr/diar/diar_pipeline.h`, `src/asr/recognizer.{h,cpp}`,
   `server/http/http_server.cpp`, `test_files/asr/wav/test/scotus_08-1314_excerpt.wav` (new),
   `tests/cpp/asr/test_diar_identity_handoff.cpp` (new), `tests/cpp/asr/CMakeLists.txt`,
