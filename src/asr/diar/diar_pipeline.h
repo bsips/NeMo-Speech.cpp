@@ -235,6 +235,18 @@ class DiarStream {
     using Segment = DiarSegment;
     std::vector<Segment> segments(const DiarSegmentationCfg& cfg = DiarSegmentationCfg()) const;
 
+    // Poll for a confirmed speaker change since the last call on THIS
+    // DiarStream instance (or since its construction, for the first
+    // call). Lives here (not on RecognitionStream) so that when a
+    // RecognitionStream hands this DiarStream to a fresh one via
+    // extract_diar_stream()/existing_diar, the "have I already announced
+    // a baseline speaker" state travels with it -- otherwise every fresh
+    // stream would spuriously re-swallow the first real change after
+    // every commit.
+    std::optional<DiarSpeakerChange> poll_speaker_change() {
+        return speaker_change_tracker_.observe(segments());
+    }
+
    private:
     // Run the next chunk if possible. force = accept a partial chunk (fewer
     // than chunk_len new frames, truncated right context); final_flush
@@ -271,6 +283,7 @@ class DiarStream {
     // ~20 min trigger / ~10 min retained at 80 ms frames.
     int64_t compact_trigger_frames_ = 15000;
     int64_t compact_retain_frames_ = 7500;
+    SpeakerChangeTracker speaker_change_tracker_;
 };
 
 }  // namespace nemo_speech::asr

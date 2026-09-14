@@ -317,18 +317,24 @@ Recognizer::warmup() {
 
 RecognitionStream::RecognitionStream(
     Recognizer* recognizer, std::unique_ptr<AsrRunner> runner, AsrRequestOptions opts,
-    bool coordinate_ingress)
+    bool coordinate_ingress, std::unique_ptr<DiarStream> existing_diar)
     : recognizer_(recognizer), runner_(std::move(runner)), opts_(std::move(opts)),
       coordinate_ingress_(coordinate_ingress) {
     runner_->set_request_options(opts_);
     if (opts_.enable_speaker_diarization) {
-        if (recognizer_->diar_model() == nullptr) {
-            throw std::invalid_argument(
-                "speaker diarization requested but no diarizer model is loaded "
-                "(start the server with --diar-model)");
+        if (existing_diar) {
+            diar_time_offset_sec_ =
+                existing_diar->n_frames() * existing_diar->seconds_per_frame();
+            diar_ = std::move(existing_diar);
+        } else {
+            if (recognizer_->diar_model() == nullptr) {
+                throw std::invalid_argument(
+                    "speaker diarization requested but no diarizer model is loaded "
+                    "(start the server with --diar-model)");
+            }
+            diar_ = std::make_unique<DiarStream>(
+                *recognizer_->diar_model(), recognizer_->config().diar.resolved_geometry());
         }
-        diar_ = std::make_unique<DiarStream>(
-            *recognizer_->diar_model(), recognizer_->config().diar.resolved_geometry());
     }
     if (coordinate_ingress_)
         recognizer_->register_streaming_ingress();
@@ -385,7 +391,7 @@ std::optional<DiarSpeakerChange>
 RecognitionStream::poll_speaker_change() {
     if (!diar_)
         return std::nullopt;
-    return speaker_change_tracker_.observe(diar_->segments());
+    return diar_->poll_speaker_change();
 }
 
 Result
@@ -455,8 +461,13 @@ RecognitionStream::build_result_(const StreamingUpdate& u, bool is_final) const 
                     // Transducer punctuation can extend a word timestamp into
                     // the next turn. Anchor attribution to the word onset and
                     // average two diar frames to reject single-frame noise.
-                    const int spk =
-                        diar_->speaker_for_word_time(ww.start_time / 1000.0, ww.end_time / 1000.0);
+                    // diar_time_offset_sec_ re-aligns this stream's own
+                    // (0-based) word clock with diar_'s timeline, which
+                    // keeps running across a handoff from a prior stream
+                    // (see RecognitionStream's constructor).
+                    const int spk = diar_->speaker_for_word_time(
+                        ww.start_time / 1000.0 + diar_time_offset_sec_,
+                        ww.end_time / 1000.0 + diar_time_offset_sec_);
                     ww.speaker_tag = spk >= 0 ? spk + 1 : 0;
                 }
                 alt.words.push_back(std::move(ww));
@@ -481,7 +492,8 @@ void
 RecognitionStream::flush_diar_deficit_(const StreamingUpdate& u) {
     if (!diar_ || u.words.empty())
         return;
-    const double end_sec = u.words.back().end_frame * recognizer_->ms_per_enc_frame() / 1000.0;
+    const double end_sec = u.words.back().end_frame * recognizer_->ms_per_enc_frame() / 1000.0
+                            + diar_time_offset_sec_;
     const auto target = static_cast<int64_t>(std::ceil(end_sec / diar_->seconds_per_frame()));
     if (target > diar_->n_frames()) {
         const int64_t before = diar_->n_frames();
@@ -521,7 +533,7 @@ RecognitionStream::next() {
 }
 
 Result
-RecognitionStream::finish() {
+RecognitionStream::finish(bool finish_diarizer) {
     const ScopedBatchCohort cohort_scope(
         pending_cohort_target_ > 0 ? pending_cohort_target_ : current_batch_cohort_target());
     pending_cohort_target_ = 0;
@@ -535,22 +547,31 @@ RecognitionStream::finish() {
         }
         resampler_flushed_ = true;
     }
-    if (diar_)
-        diar_->finish();  // flush the diarizer tail before tagging final words
     auto u = runner_->finalize();
+    if (diar_) {
+        if (finish_diarizer) {
+            diar_->finish();  // true end of audio: flush the tail, close for good
+        } else {
+            // Commit boundary within a longer session: tag the tail via
+            // the same on-demand mechanism next() already uses for
+            // endpointed finals, without closing the diarizer.
+            flush_diar_deficit_(u);
+        }
+    }
     return build_result_(u, /*is_final=*/true);
 }
 
 std::unique_ptr<RecognitionStream>
 Recognizer::streaming_recognize(
-    AsrRequestOptions opts, const std::string& language_code, bool coordinate_ingress) {
+    AsrRequestOptions opts, const std::string& language_code, bool coordinate_ingress,
+    std::unique_ptr<DiarStream> existing_diar) {
     opts.language_code = language_code;
     auto runner = make_runner();
     log_execution_status(/*streaming=*/true);
     if (model_->has_prompt())
         runner->set_prompt_index(model_->prompt_index_for_lang(language_code));
     return std::make_unique<RecognitionStream>(
-        this, std::move(runner), std::move(opts), coordinate_ingress);
+        this, std::move(runner), std::move(opts), coordinate_ingress, std::move(existing_diar));
 }
 
 Result

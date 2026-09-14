@@ -63,6 +63,9 @@ add_test(NAME diar_speaker_change COMMAND test_diar_speaker_change)
 add_executable(test_diar_recognizer test_diar_recognizer.cpp)
 target_link_libraries(test_diar_recognizer PRIVATE nemo_speech_asr)
 
+add_executable(test_diar_identity_handoff test_diar_identity_handoff.cpp)
+target_link_libraries(test_diar_identity_handoff PRIVATE nemo_speech_asr)
+
 add_executable(test_batching test_batching.cpp)
 target_link_libraries(test_batching PRIVATE nemo_speech_asr Threads::Threads)
 
