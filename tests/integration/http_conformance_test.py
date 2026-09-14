@@ -341,6 +341,70 @@ def main() -> None:
                 events.append(event)
                 if event.get("type") == "input_audio_buffer.committed":
                     break
+
+        # Runs unconditionally whenever a diarizer model is configured, independent
+        # of the jfk.wav-specific assertions below (in particular the
+        # speaker-change-event check, which raises on a single-speaker fixture and
+        # would otherwise prevent this block from ever executing). This only
+        # depends on args.diar_model and websocket_url, both already available here.
+        if args.diar_model:
+            fixture_path = (
+                Path(__file__).resolve().parent.parent.parent
+                / "test_files" / "asr" / "wav" / "test" / "scotus_08-1314_excerpt.wav"
+            )
+            with wave.open(str(fixture_path), "rb") as audio:
+                sample_rate2 = audio.getframerate()
+                pcm2 = audio.readframes(audio.getnframes())
+            split_byte = int(40.0 * sample_rate2) * 2  # 40s, matches the C++ test's default
+            chunk2 = max(2, sample_rate2 * 2 // 5)
+            events2 = []
+            with connect(
+                websocket_url, open_timeout=30, close_timeout=10, ping_interval=None
+            ) as websocket:
+                events2.append(json.loads(websocket.recv()))
+                websocket.send(
+                    json.dumps(
+                        {
+                            "type": "session.update",
+                            "session": {
+                                "sample_rate": sample_rate2,
+                                "word_timestamps": True,
+                                "speaker_diarization": True,
+                            },
+                        }
+                    )
+                )
+                for offset in range(0, split_byte, chunk2):
+                    websocket.send(pcm2[offset : offset + chunk2])
+                websocket.send(json.dumps({"type": "input_audio_buffer.commit"}))
+                while True:
+                    event = json.loads(websocket.recv())
+                    events2.append(event)
+                    if event.get("type") == "input_audio_buffer.committed":
+                        break
+                for offset in range(split_byte, len(pcm2), chunk2):
+                    websocket.send(pcm2[offset : offset + chunk2])
+                websocket.send(json.dumps({"type": "input_audio_buffer.commit"}))
+                while True:
+                    event = json.loads(websocket.recv())
+                    events2.append(event)
+                    if event.get("type") == "input_audio_buffer.committed":
+                        break
+            completed2 = [
+                e for e in events2 if e.get("type", "").endswith("transcription.completed")
+            ]
+            require(len(completed2) >= 2, "two commits produced two completed events")
+            words_before = completed2[0].get("words") or []
+            words_after = completed2[1].get("words") or []
+            require(words_before and words_before[-1].get("speaker", 0) > 0,
+                    "first commit has a tagged word before the split")
+            require(words_after and words_after[0].get("speaker", 0) > 0,
+                    "second commit has a tagged word after the split")
+            require(
+                words_before[-1]["speaker"] == words_after[0]["speaker"],
+                "speaker identity persists across a commit boundary",
+            )
+
         completed = [
             event for event in events if event.get("type", "").endswith("transcription.completed")
         ]

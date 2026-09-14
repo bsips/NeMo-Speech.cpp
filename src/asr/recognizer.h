@@ -66,7 +66,7 @@ class RecognitionStream {
    public:
     RecognitionStream(
         Recognizer* recognizer, std::unique_ptr<AsrRunner> runner, AsrRequestOptions options,
-        bool coordinate_ingress);
+        bool coordinate_ingress, std::unique_ptr<DiarStream> existing_diar = nullptr);
     ~RecognitionStream();
 
     // Buffer mono float32 audio (no decode); next() drives decoding. A zero
@@ -81,12 +81,26 @@ class RecognitionStream {
     // pull loop drains finals then a trailing interim and terminates on nullopt:
     // `while (auto r = next()) { ...; if (!r->is_final) break; }`.
     std::optional<Result> next();
-    // No more audio: flush the tail and return the end-of-stream final Result.
-    Result finish();
+    // No more audio: flush the tail and return the end-of-stream final
+    // Result. finish_diarizer=true (default) is a genuine end of audio:
+    // the diarizer is closed via DiarStream::finish() and can never
+    // accept more (matches every existing caller's expectation). Pass
+    // false for a commit boundary within a longer session -- the tail is
+    // still correctly tagged (via the same on-demand flush next() already
+    // uses for endpointed finals), but the diarizer stays alive and
+    // extractable via extract_diar_stream() for a future stream to adopt.
+    Result finish(bool finish_diarizer = true);
+    // Detaches and returns this stream's diarizer (nullptr if diarization
+    // wasn't enabled), leaving this stream's own copy null. Intended to
+    // be called right after finish(/*finish_diarizer=*/false), just
+    // before this (now-dying) stream is destroyed, so the caller can hand
+    // the still-alive DiarStream to the next RecognitionStream via its
+    // existing_diar constructor parameter.
+    std::unique_ptr<DiarStream> extract_diar_stream() { return std::move(diar_); }
     // Poll for a confirmed speaker change since the last call (or since
     // stream start, for the first call). Always returns nullopt if
-    // diarization isn't enabled for this stream. See detect_speaker_change()
-    // in diar_pipeline.h for the comparison semantics.
+    // diarization isn't enabled for this stream. See
+    // DiarStream::poll_speaker_change() for the comparison semantics.
     std::optional<DiarSpeakerChange> poll_speaker_change();
 
     const AsrRequestOptions& options() const { return opts_; }
@@ -100,7 +114,13 @@ class RecognitionStream {
     std::unique_ptr<AsrRunner> runner_;
     // Optional sidecar over the same model-rate audio as ASR.
     std::unique_ptr<DiarStream> diar_;
-    SpeakerChangeTracker speaker_change_tracker_;
+    // Seconds of diarizer-timeline time that had already elapsed when
+    // diar_ was adopted from a prior stream (0 for a freshly-created
+    // diar_). Added to every word time before it's used to query diar_,
+    // since diar_'s own internal clock never resets across a handoff but
+    // this stream's own AsrRunner always reports word times relative to
+    // its own start at 0.
+    double diar_time_offset_sec_ = 0.0;
     AsrRequestOptions opts_;
     int input_sample_rate_ = 0;
     std::unique_ptr<audio::AudioResampler> resampler_;
@@ -126,7 +146,8 @@ class Recognizer {
     // transports can opt into ingress coordination; direct/library callers
     // avoid its queue-delay cost by default.
     std::unique_ptr<RecognitionStream> streaming_recognize(
-        AsrRequestOptions opts, const std::string& language_code, bool coordinate_ingress = false);
+        AsrRequestOptions opts, const std::string& language_code, bool coordinate_ingress = false,
+        std::unique_ptr<DiarStream> existing_diar = nullptr);
     Result recognize(
         const float* samples, size_t n, AsrRequestOptions opts, const std::string& language_code,
         int sample_rate = 0);
