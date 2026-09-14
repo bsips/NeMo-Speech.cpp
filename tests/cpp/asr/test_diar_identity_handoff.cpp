@@ -12,6 +12,7 @@
 //
 // Usage: test_diar_identity_handoff <asr.gguf> <diar.gguf> <audio.wav> [--gpu N] [--split-sec N]
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <string>

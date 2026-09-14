@@ -1035,7 +1035,19 @@ struct Server::Impl {
                 if (!stream)
                     stream = recognizer->streaming_recognize(
                         options, options.language_code, /*coordinate_ingress=*/true,
-                        std::move(persistent_diar));
+                        // A session.update received between streams (stream == nullptr,
+                        // see the "session configuration cannot change after audio
+                        // starts" guard below) can flip enable_speaker_diarization back
+                        // to false. RecognitionStream's constructor only adopts
+                        // existing_diar when diarization is enabled -- otherwise it just
+                        // destroys the parameter -- so only hand the diarizer over here
+                        // when it's actually going to be adopted. Leave persistent_diar
+                        // untouched (not reset) when diarization is off: it keeps the
+                        // speaker-identity cache alive, dormant, in case a later
+                        // session.update re-enables diarization before the next stream
+                        // starts.
+                        options.enable_speaker_diarization ? std::move(persistent_diar)
+                                                            : nullptr);
             };
             auto send = [&](Value event) {
                 if (!event.find("event_id"))

@@ -341,36 +341,12 @@ def main() -> None:
                 events.append(event)
                 if event.get("type") == "input_audio_buffer.committed":
                     break
-        completed = [
-            event for event in events if event.get("type", "").endswith("transcription.completed")
-        ]
-        speaker_changes = [
-            event
-            for event in events
-            if event.get("type") == "conversation.item.speaker_diarization.changed"
-        ]
-        require(completed and completed[-1].get("transcript", "").strip(), "WebSocket final")
-        require("words" in completed[-1], "WebSocket word timestamps")
-        if args.diar_model:
-            require(
-                any(word.get("speaker", 0) > 0 for word in completed[-1]["words"]),
-                "WebSocket speaker tags",
-            )
-            require(speaker_changes, "WebSocket speaker-change event")
-            for change in speaker_changes:
-                require(
-                    isinstance(change.get("speaker"), int) and change["speaker"] > 0,
-                    "speaker-change event has a 1-based speaker id",
-                )
-                require(
-                    isinstance(change.get("start_time"), (int, float)),
-                    "speaker-change event has a start_time",
-                )
-        require(
-            any(event.get("type") == "input_audio_buffer.cleared" for event in events),
-            "WebSocket clear acknowledgement",
-        )
 
+        # Runs unconditionally whenever a diarizer model is configured, independent
+        # of the jfk.wav-specific assertions below (in particular the
+        # speaker-change-event check, which raises on a single-speaker fixture and
+        # would otherwise prevent this block from ever executing). This only
+        # depends on args.diar_model and websocket_url, both already available here.
         if args.diar_model:
             fixture_path = (
                 Path(__file__).resolve().parent.parent.parent
@@ -428,6 +404,36 @@ def main() -> None:
                 words_before[-1]["speaker"] == words_after[0]["speaker"],
                 "speaker identity persists across a commit boundary",
             )
+
+        completed = [
+            event for event in events if event.get("type", "").endswith("transcription.completed")
+        ]
+        speaker_changes = [
+            event
+            for event in events
+            if event.get("type") == "conversation.item.speaker_diarization.changed"
+        ]
+        require(completed and completed[-1].get("transcript", "").strip(), "WebSocket final")
+        require("words" in completed[-1], "WebSocket word timestamps")
+        if args.diar_model:
+            require(
+                any(word.get("speaker", 0) > 0 for word in completed[-1]["words"]),
+                "WebSocket speaker tags",
+            )
+            require(speaker_changes, "WebSocket speaker-change event")
+            for change in speaker_changes:
+                require(
+                    isinstance(change.get("speaker"), int) and change["speaker"] > 0,
+                    "speaker-change event has a 1-based speaker id",
+                )
+                require(
+                    isinstance(change.get("start_time"), (int, float)),
+                    "speaker-change event has a start_time",
+                )
+        require(
+            any(event.get("type") == "input_audio_buffer.cleared" for event in events),
+            "WebSocket clear acknowledgement",
+        )
 
         with connect(
             websocket_url,

@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
@@ -556,6 +557,13 @@ RecognitionStream::finish(bool finish_diarizer) {
             // the same on-demand mechanism next() already uses for
             // endpointed finals, without closing the diarizer.
             flush_diar_deficit_(u);
+            // Force-drain any remaining audio the diarizer has been fed but not yet
+            // chunked into a prediction, so n_frames() (read by the next stream's
+            // adoption offset) reflects everything actually fed, not just what's
+            // been recognized/flushed above. Truncated right-context on this final
+            // partial chunk is already this codebase's accepted behavior on every
+            // stream-ending flush.
+            diar_->flush_available(std::numeric_limits<int64_t>::max());
         }
     }
     return build_result_(u, /*is_final=*/true);
