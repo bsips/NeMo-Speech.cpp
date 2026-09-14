@@ -78,3 +78,34 @@ the linked Obsidian vault notes for the user-facing side of each story.
   companion `NeMoSpeech` project (confirmed via md5sum: all committed wavs
   are byte-identical duplicates).
 - **Upstreaming status:** not yet proposed to `NVIDIA/NeMo-Speech.cpp`.
+
+### 2026-09-13 — Persistent diarizer identity across realtime commits
+
+- **Upstream base:** `86e555d728539fc48939fdc014abde21925e2260`
+- **PR:** (pending — opened by the controller after this task)
+- **Files:** `src/asr/diar/diar_pipeline.h`, `src/asr/recognizer.{h,cpp}`,
+  `server/http/http_server.cpp`, `test_files/asr/wav/test/scotus_08-1314_excerpt.wav` (new),
+  `tests/cpp/asr/test_diar_identity_handoff.cpp` (new), `tests/cpp/asr/CMakeLists.txt`,
+  `tests/integration/http_conformance_test.py`,
+  `docs/superpowers/specs/2026-09-13-persistent-diarizer-identity-design.md`,
+  `docs/superpowers/plans/2026-09-13-persistent-diarizer-identity.md`.
+- **What:** the realtime WS handler destroyed the whole `RecognitionStream`
+  -- including the diarizer's speaker-embedding cache -- on every
+  `input_audio_buffer.commit`, so a speaker number had no relationship
+  across commits. Rare to notice when commits were infrequent
+  (silence-based, ~every 15s); made constantly visible by the recent
+  speaker-change-commit feature (`#2`), which commits on every genuine
+  turn. Verified the underlying model was never the problem: one real
+  90s multi-speaker recording, processed as a single continuous stream,
+  diarized consistently under both `streaming` and `offline` presets.
+- **Fix:** see `docs/superpowers/specs/2026-09-13-persistent-diarizer-identity-design.md`
+  for the full design, including a second bug found during planning
+  (word/diarizer clock desync across a handoff) and its fix.
+- **Verified against:** a new end-to-end test
+  (`test_diar_identity_handoff`) proving speaker identity survives a
+  commit boundary, using a real public-domain multi-speaker fixture
+  (U.S. Supreme Court oral argument audio, case 08-1314, sourced from
+  archive.org's official `SCOTUSOralArugments` collection); extended
+  `tests/integration/http_conformance_test.py` proving the same property
+  at the WebSocket protocol level across two real commits.
+- **Upstreaming status:** not yet proposed to `NVIDIA/NeMo-Speech.cpp`.
