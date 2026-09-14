@@ -1028,12 +1028,14 @@ struct Server::Impl {
             options.enable_automatic_punctuation = true;
             int sample_rate = recognizer->sample_rate();
             std::unique_ptr<asr::RecognitionStream> stream;
+            std::unique_ptr<asr::DiarStream> persistent_diar;
             std::string partial_transcript;
             size_t audio_bytes = 0;
             auto ensure_stream = [&] {
                 if (!stream)
                     stream = recognizer->streaming_recognize(
-                        options, options.language_code, /*coordinate_ingress=*/true);
+                        options, options.language_code, /*coordinate_ingress=*/true,
+                        std::move(persistent_diar));
             };
             auto send = [&](Value event) {
                 if (!event.find("event_id"))
@@ -1172,12 +1174,17 @@ struct Server::Impl {
                             break;
                     } else if (type == "input_audio_buffer.commit") {
                         ensure_stream();
-                        if (!emit(stream->finish()))
+                        if (!emit(stream->finish(/*finish_diarizer=*/false)))
                             break;
                         // poll_speaker_change() is deliberately not called after finish():
                         // any speaker change confirmed only in the flushed tail goes
                         // unreported by this event, but is still captured correctly by
                         // the completed event's own word-level speaker tags above.
+                        // finish_diarizer=false + extract_diar_stream(): the diarizer's
+                        // speaker identity survives this commit and is handed to the
+                        // next stream via ensure_stream() above, instead of being
+                        // destroyed and rebuilt from scratch on every single commit.
+                        persistent_diar = stream->extract_diar_stream();
                         stream.reset();
                         audio_bytes = 0;
                         Value committed(Value::Object{});
@@ -1185,6 +1192,10 @@ struct Server::Impl {
                         if (!send(std::move(committed)))
                             break;
                     } else if (type == "input_audio_buffer.clear" || type == "response.cancel") {
+                        // Discarding buffered *transcript* audio doesn't mean discarding
+                        // *voice identity* tracking -- extract here too, same as commit.
+                        if (stream)
+                            persistent_diar = stream->extract_diar_stream();
                         stream.reset();
                         partial_transcript.clear();
                         audio_bytes = 0;
