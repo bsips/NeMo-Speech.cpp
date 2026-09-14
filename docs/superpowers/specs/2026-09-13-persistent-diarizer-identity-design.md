@@ -147,6 +147,55 @@ today's behavior.
    }
    ```
 
+   **Critical correctness detail, found during implementation planning
+   (not in the original approach above): word timestamps and diarizer
+   timestamps will desync across a handoff unless corrected.** The
+   adopted `DiarStream`'s internal frame timeline keeps counting from its
+   true start (that's the whole point — it never resets), but a brand new
+   `RecognitionStream`'s `AsrRunner` always reports word timestamps
+   relative to *that stream's own* start at 0. Word-level diarization
+   tagging (`recognizer.cpp:454-460`, `diar_->speaker_for_word_time(...)`)
+   and on-demand tail-flushing (`flush_diar_deficit_`, `recognizer.cpp:481`)
+   both feed ASR-relative word times directly into the diarizer's
+   absolute timeline today — correct only because, until now, both clocks
+   always started together at stream construction.
+
+   Fix: when adopting `existing_diar`, derive and store how much
+   diarizer-time had already elapsed, and add it to every word time
+   before it reaches the diarizer (not to the word's own reported
+   `start_time`/`end_time` — those stay stream-relative, matching
+   existing API/display behavior downstream):
+   ```cpp
+   // New private member, recognizer.h: double diar_time_offset_sec_ = 0.0;
+   if (opts_.enable_speaker_diarization) {
+       if (existing_diar) {
+           diar_time_offset_sec_ = existing_diar->n_frames() * existing_diar->seconds_per_frame();
+           diar_ = std::move(existing_diar);
+       } else {
+           ...
+       }
+   }
+   ```
+   Then at both `diar_` query sites, add `diar_time_offset_sec_` to the
+   word time(s) passed in (only at the query call, `ww.start_time`/
+   `ww.end_time` themselves are untouched):
+   ```cpp
+   // recognizer.cpp:458-459
+   const int spk = diar_->speaker_for_word_time(
+       ww.start_time / 1000.0 + diar_time_offset_sec_,
+       ww.end_time / 1000.0 + diar_time_offset_sec_);
+   ```
+   ```cpp
+   // recognizer.cpp:484, flush_diar_deficit_
+   const double end_sec = u.words.back().end_frame * recognizer_->ms_per_enc_frame() / 1000.0
+                           + diar_time_offset_sec_;
+   ```
+   No caller-facing change: this is entirely internal to
+   `RecognitionStream`, derived automatically from the adopted
+   `DiarStream`'s own state at the moment of adoption. Neither
+   `http_server.cpp` nor `streaming_recognize`'s other callers need to
+   know or pass anything extra.
+
 4. **`SpeakerChangeTracker` moves from `RecognitionStream` onto
    `DiarStream`.** Currently (`recognizer.h`) `RecognitionStream` owns a
    `SpeakerChangeTracker speaker_change_tracker_` member and
@@ -233,10 +282,16 @@ server-side correctness fix.
   cross-instance speaker identity — construct a `RecognitionStream`, feed
   real audio from one real speaker, `finish(false)`, `extract_diar_stream()`,
   construct a **second** `RecognitionStream` adopting that extracted
-  stream, feed more audio from the **same** speaker, and assert the
-  speaker number is unchanged across that boundary (this is the property
-  that did not hold before this fix, and is exactly what a plain
-  before/after diff of this test would show).
+  stream, feed more audio continuing from the **same** speaker (well past
+  the handoff point, in both timestamp-seconds and audio-content terms),
+  and assert the speaker number is unchanged across that boundary (this is
+  the property that did not hold before this fix, and is exactly what a
+  plain before/after diff of this test would show). This same test is
+  also the natural place to verify the timestamp-offset correction above:
+  if it were missing or wrong, word-to-speaker tagging right after the
+  handoff would silently point at the wrong slice of the diarizer's
+  timeline, which a real multi-speaker fixture spanning the handoff (see
+  below) will expose as a wrong or missing tag, not just a wrong number.
 - **Fixture**: commit the verified real clip used above — a 90-second,
   16kHz mono PCM16 excerpt of public-domain SCOTUS oral argument audio
   (case 08-1314, sourced from archive.org's official
