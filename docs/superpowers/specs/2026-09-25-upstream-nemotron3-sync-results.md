@@ -11,6 +11,13 @@ test presets exist), the exact model paths given in the task message,
 cuda:0`, `-f json`, `--word-times`, `-o` — not `--gpu`/`--output-format`/
 `--word-timestamps`, which don't exist on this binary).
 
+This file was amended in a second verification pass that re-derived every
+number from the artifacts on disk. That pass changed no verdict, but it
+replaced Step 5's "exit 0" with the values its assertions actually compared,
+added a direct id-continuity check to Step 3, and corrected three claims
+this document made about its own cleanup and run conditions. Each
+correction is marked inline rather than quietly overwritten.
+
 Baseline: `ctest --output-on-failure` from `build/cuda-asr` — **14/14 pass**
 (shared_utilities, subtitles, http_server_config, installed_sdk_consumer,
 cli_contract, cli_model_store, cli_install_linux, endpointer_policy,
@@ -419,7 +426,7 @@ inferred from the unit test alone.
 | 2. False-positive count | INCONCLUSIVE (unexpected direction) | gated 11/66 (16.7%) vs. pre-gate 6/71 (8.5%) — confounded by differing system load between runs |
 | 3. Identity across commit boundaries | PASS | 0 sustained mismatch runs across ~100 commits; 6.0% isolated-word mismatch rate; ids `{1,2,3}` only, both majority ids in continuous use from first commit to last |
 | 4. AMI continuity | FAIL at brief's exact command | 1→2 at split-sec 20 and 25, both inside a 7s RTTM truth gap; OK at 10/15/30/45 |
-| 5. HTTP conformance | PASS (both fixtures) | exit 0 on 90s and 10-min clips; speaker-change event fired on both |
+| 5. HTTP conformance | PASS (both fixtures) | exit 0 on 90s (16.7s) and 10-min (2m30s) clips; commit boundary speaker 2 → 2 over 101/109 tagged words; 2 speaker-change events fired (t=7.291s, t=81.371s) |
 | 6. Companion-repo checks | PASS | 4/4 pytest; status panel feed confirmed live (423 pipeline_status events) |
 
 Divergences #1 and #3 hold up under real audio. Divergence #2's gate did
