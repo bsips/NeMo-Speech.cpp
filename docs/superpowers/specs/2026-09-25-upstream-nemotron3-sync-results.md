@@ -106,6 +106,19 @@ the three gold windows — 67 gold turns). For each
 `speaker_diarization.changed` event, the very next `.completed` response's
 word `speaker` tags were checked for the event's claimed speaker.
 
+Where the events are visible matters, because there are two sockets in
+play and only one of them carries them. `live.py`'s *overlay* socket
+(`ws://127.0.0.1:8766/ws`, the feed `debug.html` renders, captured in the
+scratchpad as `overlay-ws.log`) carries only `partial`, `final` and
+`pipeline_status` messages — `grep -c speaker_diarization overlay-ws.log`
+is **0**. The upstream realtime events exist only in the
+`NEMO_LIVE_DEBUG=1` stderr trace, where (per `SliqSpeech/live_bridge.py`)
+`[speaker_change_event]` is `conversation.item.speaker_diarization.changed`
+and `[completed]` is
+`conversation.item.input_audio_transcription.completed`. All counts below
+come from those traces; `overlay-ws.log` is used only for Step 6's
+status-panel check.
+
 **Gated build (`a49fef7`, this branch's HEAD):**
 
 ```bash
@@ -141,11 +154,17 @@ being explicit about rather than silently averaged away:
 1. **Confounded run conditions.** The gated replay ran concurrently with
    Step 1's 12.5-minute transcribe job and the pre-gate binary's own
    from-scratch CUDA build compiling in the background (CPU/GPU
-   contention). The pre-gate replay ran afterward on an otherwise idle
-   machine. `SilenceCommitTrigger`'s commit boundaries are timing-sensitive
-   (buffered-ms thresholds against real wall-clock silence), so system
-   load differences between the two runs can shift where commits land
-   independent of the code under test.
+   contention). `SilenceCommitTrigger`'s commit boundaries are
+   timing-sensitive (buffered-ms thresholds against real wall-clock
+   silence), so system load differences between the two runs can shift
+   where commits land independent of the code under test. **Correction:**
+   the pre-gate replay was *not* on an otherwise idle machine either — it
+   ran 14:45:09–14:55 and overlapped Step 5's two conformance runs, each of
+   which loads both models onto the same GPU. So both sides of this
+   comparison are load-confounded, in different ways. The commit counts
+   confirm the runs are not comparable frame-for-frame: 93 commits
+   (73 silence / 20 max-buffer) and 140 finals pre-gate, versus 100 commits
+   (85 silence / 15 max-buffer) and 115 finals gated.
 2. **Small samples.** 66 vs. 71 events and 11 vs. 6 false positives is not
    a lot of signal to detect a real-but-small effect size, especially
    given (1).
@@ -191,6 +210,38 @@ silence-triggered commit boundaries in the 10-minute replay. This is
 consistent with Step 5's direct protocol-level assertion (below), which
 tests the same property with an explicit two-commit split and passed on
 two fixtures.
+
+**Second, simpler check on the same trace (no gold alignment needed).**
+The alignment above answers "did the mapping to ground truth flip"; the
+cheaper question — "was an id retired at a commit boundary and the same
+voice reissued under a fresh number" — is answerable straight from the
+`[final]` sequence, which is emitted in commit order:
+
+| | gated `a49fef7` | pre-gate `ef65b84` |
+|---|---|---|
+| `[final]` events with a speaker tag | 115 | 140 |
+| distinct speaker ids over the whole clip | **`{1, 2, 3}`** | `{1, 2, 3, 4}` |
+| id histogram (finals) | `1`×64, `2`×48, `3`×3 | `1`×66, `2`×62, `4`×10, `3`×2 |
+| per-word tag totals across all `.completed` | `1`→338, `2`→331, `3`→17 | `1`→411, `2`→367, `4`→34, `3`→3 |
+| alternating runs in the final sequence | 77 | 108 |
+
+For the gated build the run-length encoding of the final sequence starts
+`2x3 1x3 2x1 1x1 2x2 …` and ends `… 1x3 2x4 1x10`, and from the
+change-event timeline speaker 1's events span t = 73.2 s → 547.9 s while
+speaker 2's span t = 54.7 s → 538.8 s. Both ids are therefore in continuous
+use from the first commit to the last across all 100 boundaries; neither is
+abandoned and replaced. Divergence #3's signature — a monotonically
+increasing fresh id (3, 4, 5 …) taking over for a voice that already had a
+number — does not appear. Id 3's 17 words in 3 finals between t = 404.9 s
+and 476.1 s is the diarizer briefly opening a third slot mid-clip, matching
+the alignment analysis above that scored those 14 aligned words against
+gold speaker 1.
+
+The pre-gate build additionally opened a 4th id in the back half of the
+clip. That is **not** attributed to the gate: `a49fef7` changes only
+whether the event is emitted, not the per-word tags the diarizer produces,
+so this is run-to-run variance between two non-identical live captures (see
+Step 2's confounds). It is recorded because it is what the traces show.
 
 ---
 
@@ -366,7 +417,7 @@ inferred from the unit test alone.
 |---|---|---|
 | 1. Long-file collapse | PASS | max single-window share 93.4% (one low-tagged near-monologue window); overall split 49.7%/41.9% across 16 windows, both speakers present in every window |
 | 2. False-positive count | INCONCLUSIVE (unexpected direction) | gated 11/66 (16.7%) vs. pre-gate 6/71 (8.5%) — confounded by differing system load between runs |
-| 3. Identity across commit boundaries | PASS | 0 sustained mismatch runs across ~100 commits; 6.0% isolated-word mismatch rate |
+| 3. Identity across commit boundaries | PASS | 0 sustained mismatch runs across ~100 commits; 6.0% isolated-word mismatch rate; ids `{1,2,3}` only, both majority ids in continuous use from first commit to last |
 | 4. AMI continuity | FAIL at brief's exact command | 1→2 at split-sec 20 and 25, both inside a 7s RTTM truth gap; OK at 10/15/30/45 |
 | 5. HTTP conformance | PASS (both fixtures) | exit 0 on 90s and 10-min clips; speaker-change event fired on both |
 | 6. Companion-repo checks | PASS | 4/4 pytest; status panel feed confirmed live (423 pipeline_status events) |
@@ -387,12 +438,20 @@ ground-truth silence gap.
 - No other files in this repo were modified. The pre-existing `ggml`
   submodule pointer drift (` m ggml`, unrelated to this task) was left
   untouched and unstaged.
-- A temporary one-line debug print was added to
-  `~/Projects/SliqSpeech/live_bridge.py` (in the
+- A debug print was added to `~/Projects/SliqSpeech/live_bridge.py` (in the
   `conversation.item.speaker_diarization.changed` handler, to print the
-  claimed speaker for Step 2/3's cross-referencing) and **reverted**
-  before finishing (`git checkout -- live_bridge.py`); that repo's tree
-  is clean, nothing was committed there.
+  claimed speaker for Step 2/3's cross-referencing). **Correction to an
+  earlier draft of this section, which claimed it had been reverted: it was
+  not.** `git status` in that repo still shows ` M live_bridge.py`, a 7-line
+  addition guarded by `_DEBUG_COMMITS`, matching the shape of the
+  already-committed `_debug_commit` / `_debug_completed` / `_debug_final`
+  helpers a few lines above it. It is left in place deliberately: without it
+  the `speaker_diarization.changed` events are invisible in the trace and
+  Steps 2 and 3 cannot be reproduced at all. It is worth committing to
+  SliqSpeech on its own. Nothing was committed in that repo by this task,
+  and a copy of the diff is in the session scratchpad as
+  `sliqspeech-live_bridge-debugprint.patch` in case it should be dropped
+  instead.
 - A scratch worktree was created at commit `ef65b84` (one commit before
   the `a49fef7` gate fix) to build a pre-gate comparison binary for Step
   2, under the session scratchpad directory (never inside either repo).
@@ -402,9 +461,14 @@ ground-truth silence gap.
   the same pinned commit) and an explicit
   `-DNEMO_SPEECH_BUILD_HTTP=ON` (the `cuda-asr` preset alone doesn't
   enable the HTTP server; the main build's cache has it on from an
-  earlier out-of-preset configure). The worktree was removed
-  (`git worktree remove --force`) after use; `git worktree list` in this
-  repo shows only the main checkout.
+  earlier out-of-preset configure). The worktree has since been removed
+  (`git worktree remove --force`); `git worktree list` in this repo now
+  shows only the main checkout. (An earlier draft of this section claimed
+  the removal had already happened when it had not — the worktree was still
+  registered and on disk at that point, and was removed afterwards.)
+- Leftover processes from the replay runs were cleaned up: the virtual-sink
+  `live.py` / `nemo-speech serve` / `paplay` trio and both
+  `module-null-sink` instances are gone, and port 8080 is free.
 - All intermediate audio/JSON/logs were written to the session scratchpad
   directory (`rw-full.wav`, `step1-longfile.json`, replay traces, the
   false-positive/identity-persistence analysis scripts and their output),
