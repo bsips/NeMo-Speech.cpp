@@ -148,6 +148,19 @@ struct DiarSpeakerChange {
 std::optional<DiarSpeakerChange> detect_speaker_change(
     const std::vector<DiarSegment>& segments, std::optional<int> last_reported);
 
+// Keep only segments whose onset is in immutable territory (t0 strictly
+// before stable_time). Gates the speaker-change event on
+// DiarStream::stable_frames(): without it the tracker reports off
+// segments().back() with no stability guarantee at all, which is the
+// mechanism behind the documented false positives -- a "confirmed" change
+// whose words the very next final still tags with the old speaker.
+//
+// Deliberately gates on the onset, not on t1 <= stable_time: requiring a
+// segment to have ended would mean never reporting a speaker who is
+// currently talking, which is the only case this event exists for.
+std::vector<DiarSegment> segments_before(
+    const std::vector<DiarSegment>& segments, double stable_time);
+
 // Wraps detect_speaker_change() with a policy the pure comparison alone
 // can't express: a fresh stream's first confirmed segment is a baseline,
 // not a "change" -- there's no genuine prior speaker for it to differ
@@ -262,7 +275,8 @@ class DiarStream {
     // stream would spuriously re-swallow the first real change after
     // every commit.
     std::optional<DiarSpeakerChange> poll_speaker_change() {
-        return speaker_change_tracker_.observe(segments());
+        return speaker_change_tracker_.observe(
+            segments_before(segments(), stable_frames() * sec_per_frame_));
     }
 
    private:

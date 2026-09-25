@@ -405,6 +405,17 @@ nemo_speech::asr::detect_speaker_change(
 }
 
 std::vector<DiarSegment>
+nemo_speech::asr::segments_before(
+    const std::vector<DiarSegment>& segments, double stable_time) {
+    std::vector<DiarSegment> out;
+    out.reserve(segments.size());
+    for (const auto& s : segments)
+        if (s.t0 < stable_time)
+            out.push_back(s);
+    return out;
+}
+
+std::vector<DiarSegment>
 nemo_speech::asr::diar_segments_from_probs(
     const float* probs, int64_t n_frames, int n_spk, double sec_per_frame,
     const DiarSegmentationCfg& cfg) {
