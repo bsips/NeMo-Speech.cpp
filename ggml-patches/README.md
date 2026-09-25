@@ -143,6 +143,40 @@ stock comparison therefore requires both a pristine ggml checkout and
   ReLU epilogues. This preserves the VoiceChat perception stem's native BF16
   behavior without adding standalone conversion kernels.
 
+- **0021-half-snake-fusion-aliasing-guard.patch** - fixes a read/write race in
+  the `half_snake` CUDA fusion added by 0007. The graph allocator plans buffers
+  for the *unfused* node sequence, in which the parent activation's last reader
+  is the `leaky_relu`, so its memory is free to be recycled for the `concat`
+  output -- the unfused `concat` reads the materialised add/leaky_relu, never
+  the parent. The fused kernel still reads that parent while writing the concat,
+  so wherever the allocator overlapped the two at different offsets, threads
+  clobbered input that other threads had not yet read.
+
+  Fusion is now skipped unless the output is disjoint from both inputs, or
+  aliases them exactly -- in which case every thread reads and writes a single
+  address and is safe. Because it depends on where the allocator happens to
+  place buffers, this corrupted some graphs and left others alone, which is why
+  the arithmetic always checked out in isolation.
+
+  On a GB300, a 3-frame NanoCodec decode against its own CPU reference. Before
+  the guard the corruption depends on allocator placement, so it is a
+  distribution, not a figure: 15 runs spanned 11.8 to 14.6 dB SNR, median 13.9.
+  With the guard the decode is stable at 39.5 dB, against 40.2 dB with fusion
+  disabled outright -- and the guard costs 0.8% throughput where disabling
+  fusion costs 26%. Covered by
+  `tests/cpp/tts/test_nanocodec_half_snake_fusion.cpp`.
+
+- **0022-cuda-q8-gelu-fusion.patch** - fuses the bias add, exact `GELU_ERF`,
+  and optional F16 cast after the cached-F16 Q8 cuBLAS GEMM into one CUDA
+  kernel. Active only with `GGML_SKINNY_Q8_CUBLAS_F16=1` on SM80+ GPUs;
+  `GGML_SKINNY_Q8_GELU=0` disables it. Covered by `test-backend-ops -o
+  Q8_GELU_ERF_FUSION`.
+
+- **0023-cuda-skinny-q8-cache-lifetime.patch** - drops skinny-Q8 cache entries,
+  and any planes they own, when their CUDA weight buffer is freed or cleared.
+  The cache was keyed only by device address, so weights later allocated at a
+  reused address were treated as already repacked.
+
 ## Regenerating after editing ggml
 
 Several patches touch the same ggml files, so regenerating a patch from the
