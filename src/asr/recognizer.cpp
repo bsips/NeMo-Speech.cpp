@@ -327,11 +327,12 @@ RecognitionStream::RecognitionStream(
     runner_->set_request_options(opts_);
     if (opts_.enable_speaker_diarization) {
         if (existing_diar) {
-            // committed_frames(), not n_frames(): a provisional preview tail
-            // is replaced on replay, so including it would overshoot this
-            // stream's clock against the diarizer's own timeline.
-            diar_time_offset_sec_ =
-                existing_diar->committed_frames() * existing_diar->seconds_per_frame();
+            // Frame indices are absolute over fed audio, so the offset is
+            // the audio actually fed — not committed_frames(), which
+            // excludes the unconsumed tail and would resolve every word
+            // in this stream ~1 chunk early (into the previous turn at a
+            // commit boundary).
+            diar_time_offset_sec_ = existing_diar->fed_audio_sec();
             diar_ = std::move(existing_diar);
         } else {
             if (recognizer_->diar_model() == nullptr) {
@@ -591,18 +592,20 @@ RecognitionStream::finish(bool finish_diarizer) {
         } else {
             // Commit boundary within a longer session: tag the tail via
             // the same on-demand mechanism next() already uses for
-            // endpointed finals, without closing the diarizer. That flush
-            // is a provisional preview and is discarded with this stream.
+            // endpointed finals, without closing the diarizer.
+            // flush_diar_deficit_() calls flush_available(), a provisional
+            // (force=true, final_flush=false) chunk: it labels this
+            // final's trailing words against a cloned state copy without
+            // touching persistent AOSC state or mel_consumed_, so it is
+            // discarded along with this stream rather than surviving into
+            // the adopting stream's history.
             //
-            // Deliberately NO force-drain here. feed_audio() already runs
-            // every whole chunk persistently, so the committed frontier is
-            // already correct. The only way to force the sub-chunk tail
-            // into persistent state is run_one_chunk(force=true,
-            // final_flush=true), which bakes a truncated-right-context
-            // chunk into the AOSC state the *next* stream adopts --
-            // acceptable at a true end of stream, not at a boundary where
-            // audio continues. The tail stays in mel_buf_ and the adopting
-            // stream labels it with full right context.
+            // No further drain is needed: feed_audio() already runs every
+            // whole chunk persistently as audio arrives, so the diarizer's
+            // committed frontier is already correct without any action
+            // here. (The adoption offset itself is fed_audio_sec(), which
+            // counts mel frames produced -- not chunks committed -- so it
+            // is unaffected by whether a drain happens at all.)
             flush_diar_deficit_(u);
         }
     }

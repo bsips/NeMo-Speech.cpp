@@ -308,6 +308,11 @@ DiarStream::committed_frames() const {
     return std::max<int64_t>(0, n_frames() - provisional_frames_);
 }
 
+double
+DiarStream::fed_audio_sec() const {
+    return mel_produced() * m_.cfg().window_stride;
+}
+
 namespace {
 
 // Nearest frozen-segment speaker for a time range that starts before the

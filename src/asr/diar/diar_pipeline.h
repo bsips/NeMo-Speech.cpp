@@ -211,6 +211,13 @@ class DiarStream {
     // question). Used for the adoption offset when a DiarStream is handed
     // to a fresh RecognitionStream across a commit boundary.
     int64_t committed_frames() const;
+    // Seconds of audio fed to this stream, i.e. the absolute end of its
+    // timeline. Frame indices are absolute over fed audio, so this — not
+    // the persistently-consumed frontier — is the clock a fresh
+    // RecognitionStream must offset its own 0-based word times by when it
+    // adopts this diarizer. Geometry-independent: unlike a frame count it
+    // does not depend on chunk length or right context.
+    double fed_audio_sec() const;
     // Retained per-frame speaker probabilities, frame-major, covering frames
     // [frame_probs_base(), n_frames()). For streams below the compaction
     // horizon frame_probs_base() is 0 and this is the whole timeline.

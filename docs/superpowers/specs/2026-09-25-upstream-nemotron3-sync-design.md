@@ -144,45 +144,77 @@ Nothing in `refresh_speaker_tags()` survives the `RecognitionStream` being
 destroyed at a commit, and a fresh `DiarStream` renumbers speakers
 arbitrarily. The two are complementary, not competing.
 
-### 5.1 The force-drain was never the right mechanism
+### 5.1 A provisional chunk never touches persistent state — and that's not why we stop draining
 
-`DiarStream::feed_audio()` already calls `run_ready_chunks(/*end_of_stream=*/false)`,
-which is `while (run_one_chunk(/*force=*/false, /*final_flush=*/false))` — so
-**every whole chunk is already persisted as audio arrives.** At a commit
-boundary the only thing our `flush_available(INT64_MAX)` force-drain added was
-the sub-chunk *tail*.
+An earlier draft of this section argued that we must not force the sub-chunk
+tail into persistent state because doing so would "bake a truncated-right-
+context chunk into the AOSC state the next stream adopts." That reasoning
+does not hold up against the actual call path and was dropped after review
+verified it against source:
 
-We must not persist that tail. In upstream's code
-`provisional = force && !final_flush`, so the only way to force the tail into
-persistent state is `run_one_chunk(/*force=*/true, /*final_flush=*/true)` —
-which bakes a truncated-right-context chunk permanently into the AOSC state
-that the *next* stream then adopts. Upstream made forced chunks provisional
-precisely to stop that from degrading subsequent predictions. Truncated right
-context is acceptable at a true end of stream (nothing follows it); at a commit
-boundary audio continues, so it is not.
+`RecognitionStream::finish(finish_diarizer=false)` tags the tail via
+`flush_diar_deficit_(u)`, which calls `DiarStream::flush_available()`, which
+calls `run_one_chunk(/*force=*/true, /*final_flush=*/false)`. In upstream's
+code `provisional = force && !final_flush`, so this call is *always*
+provisional. `run_one_chunk` clones `state_` into a temporary `preview_state`
+before running the model (`diar_pipeline.cpp:209-212`), and on the provisional
+path it `return`s at line 261 — *before* line 264's `mel_consumed_ = end`.
+So this call never touches persistent AOSC state or `mel_consumed_`,
+regardless of how short or truncated the tail chunk is. The truncated-right-
+context hazard is real, but it belongs to a call this fix never makes
+(`run_one_chunk(force=true, final_flush=true)`, which *is* how
+`finish_diarizer=true` — a true end of stream — persists its own truncated
+final chunk); it does not apply to the commit-boundary path at all.
 
-And the tail is not lost by declining to force it: it stays in `mel_buf_` /
-`audio_buf_`, and the adopted `DiarStream` processes it with full right context
-as soon as the next stream feeds more audio.
+The actual reason to drop the drain is simpler and architectural:
+`DiarStream::feed_audio()` already calls
+`run_ready_chunks(/*end_of_stream=*/false)`, which is
+`while (run_one_chunk(/*force=*/false, /*final_flush=*/false))` — so **every
+whole chunk is already persisted as audio arrives.** A drain at the commit
+boundary would only ever reach the sub-chunk tail, and that tail is not lost
+by declining to force it: it stays in `mel_buf_` / `audio_buf_`, and the
+adopted `DiarStream` processes it with full right context as soon as the next
+stream feeds more audio. There is nothing left for a drain to do.
 
-### 5.2 The fix
+### 5.2 The fix: offset from fed audio, not committed frames
 
-**Stop draining at the commit boundary.** Derive the adoption offset from the
-*committed* frame count instead of from `n_frames()`:
+The diarizer's frame grid is absolute over *fed* audio: frame `k` always
+covers `[k*spf, (k+1)*spf)` of audio since the `DiarStream` was created,
+whether or not frame `k`'s probabilities are still provisional.
+"Replaced on replay" (`provisional_frames_`) rewinds label *content* for that
+region when the next real chunk arrives — it does not change which audio a
+frame index maps to. So the adoption offset must equal **audio fed so far**,
+not any persistently-committed subset of it:
 
-- Add a narrow accessor `int64_t DiarStream::committed_frames() const`
-  returning `n_frames() - provisional_frames_` — the frontier of persistent
-  state, excluding any preview tail.
+- Add `double DiarStream::fed_audio_sec() const`, returning
+  `mel_produced() * m_.cfg().window_stride` — the absolute end of the fed-audio
+  timeline. Unlike a frame count this is geometry-independent: it does not
+  depend on chunk length or right context.
 - `RecognitionStream::finish(finish_diarizer=false)` drops the
-  `flush_available(std::numeric_limits<int64_t>::max())` call entirely.
+  `flush_available(std::numeric_limits<int64_t>::max())` call entirely (§5.1 —
+  there is nothing left for it to do).
 - The next stream's `diar_time_offset_sec_` derives from
-  `committed_frames() * seconds_per_frame()`.
+  `existing_diar->fed_audio_sec()`.
 
-`stable_frames()` is deliberately *not* reused for this. For v2 it additionally
-clamps to `birth_gate_.settled_frames()`, which is the right frontier for
-deciding whether a speaker *label* is immutable (§6) but the wrong one for a
-*clock* offset — it would understate elapsed audio and misalign the adopted
-diarizer's timeline against the next stream's word times.
+`committed_frames()` (`n_frames() - provisional_frames_`) is retained as an
+accessor — it answers "how much audio is in permanent state," which Task 2's
+regression test asserts on directly — but it is **not** the clock. Using it as
+the offset excludes the unconsumed tail and undercounts fed audio by up to one
+chunk (~1.6 s observed on the committed multi-speaker fixture), resolving the
+adopted stream's early words against the *previous* turn's speaker region at
+a commit boundary — precisely the bug this design exists to prevent.
+
+`stable_frames()` is also not reused for this, for the same reason as before:
+for v2 it additionally clamps to `birth_gate_.settled_frames()`, the right
+frontier for deciding whether a speaker *label* is immutable (§6) but the
+wrong one for a *clock* offset.
+
+Reviving the pre-sync mechanism — `flush_available(INT64_MAX)` followed by
+`n_frames()` — was also rejected. Under `riva_streaming`'s `right_context=0`
+it happened to be accurate to within one frame, but under SliqSpeech's live
+`--diar-chunk 10 --diar-rc 5` geometry it undershoots true fed audio by up to
+0.4 s, and it still requires a drain call to produce a number `fed_audio_sec()`
+already gives directly from mel state.
 
 ### 5.3 Word tagging at the boundary is unaffected
 
