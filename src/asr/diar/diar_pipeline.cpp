@@ -303,6 +303,11 @@ DiarStream::stable_frames() const {
     return std::clamp<int64_t>(birth_gate_.settled_frames(), 0, committed);
 }
 
+int64_t
+DiarStream::committed_frames() const {
+    return std::max<int64_t>(0, n_frames() - provisional_frames_);
+}
+
 namespace {
 
 // Nearest frozen-segment speaker for a time range that starts before the

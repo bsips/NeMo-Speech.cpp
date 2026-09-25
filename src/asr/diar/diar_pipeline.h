@@ -204,6 +204,13 @@ class DiarStream {
     // Frames before this frontier cannot be revised. V2 additionally excludes
     // its birth-gate history; V3 uses native probabilities with no birth gate.
     int64_t stable_frames() const;
+    // Frontier of persistent state: emitted frames minus any provisional
+    // preview tail. Unlike stable_frames(), this is NOT clamped to the
+    // birth gate -- it answers "how much audio has been permanently
+    // consumed" (a clock), not "which labels are immutable" (an identity
+    // question). Used for the adoption offset when a DiarStream is handed
+    // to a fresh RecognitionStream across a commit boundary.
+    int64_t committed_frames() const;
     // Retained per-frame speaker probabilities, frame-major, covering frames
     // [frame_probs_base(), n_frames()). For streams below the compaction
     // horizon frame_probs_base() is 0 and this is the whole timeline.

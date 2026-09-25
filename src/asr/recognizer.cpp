@@ -8,7 +8,6 @@
 #include <cctype>
 #include <cmath>
 #include <iostream>
-#include <limits>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
@@ -328,8 +327,11 @@ RecognitionStream::RecognitionStream(
     runner_->set_request_options(opts_);
     if (opts_.enable_speaker_diarization) {
         if (existing_diar) {
+            // committed_frames(), not n_frames(): a provisional preview tail
+            // is replaced on replay, so including it would overshoot this
+            // stream's clock against the diarizer's own timeline.
             diar_time_offset_sec_ =
-                existing_diar->n_frames() * existing_diar->seconds_per_frame();
+                existing_diar->committed_frames() * existing_diar->seconds_per_frame();
             diar_ = std::move(existing_diar);
         } else {
             if (recognizer_->diar_model() == nullptr) {
@@ -589,15 +591,19 @@ RecognitionStream::finish(bool finish_diarizer) {
         } else {
             // Commit boundary within a longer session: tag the tail via
             // the same on-demand mechanism next() already uses for
-            // endpointed finals, without closing the diarizer.
+            // endpointed finals, without closing the diarizer. That flush
+            // is a provisional preview and is discarded with this stream.
+            //
+            // Deliberately NO force-drain here. feed_audio() already runs
+            // every whole chunk persistently, so the committed frontier is
+            // already correct. The only way to force the sub-chunk tail
+            // into persistent state is run_one_chunk(force=true,
+            // final_flush=true), which bakes a truncated-right-context
+            // chunk into the AOSC state the *next* stream adopts --
+            // acceptable at a true end of stream, not at a boundary where
+            // audio continues. The tail stays in mel_buf_ and the adopting
+            // stream labels it with full right context.
             flush_diar_deficit_(u);
-            // Force-drain any remaining audio the diarizer has been fed but not yet
-            // chunked into a prediction, so n_frames() (read by the next stream's
-            // adoption offset) reflects everything actually fed, not just what's
-            // been recognized/flushed above. Truncated right-context on this final
-            // partial chunk is already this codebase's accepted behavior on every
-            // stream-ending flush.
-            diar_->flush_available(std::numeric_limits<int64_t>::max());
         }
     }
     auto result = build_result_(u, /*is_final=*/true);
