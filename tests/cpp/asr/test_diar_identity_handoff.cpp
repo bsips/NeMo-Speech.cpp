@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -104,6 +105,37 @@ main(int argc, char** argv) {
         std::fprintf(stderr, "[identity-handoff] FAIL: extract_diar_stream() returned null\n");
         return 1;
     }
+
+    // Upstream's forced non-final chunks are previews: they advance
+    // n_frames() but are replaced on replay (provisional_frames_). Take
+    // such a preview deliberately, then confirm committed_frames()
+    // excludes it. The next stream's adoption offset must derive from the
+    // committed frontier -- an offset read off n_frames() would overshoot
+    // by the preview tail and desync the adopted diarizer's clock against
+    // stream 2's word times.
+    extracted->flush_available(std::numeric_limits<int64_t>::max());
+    const int64_t total_frames = extracted->n_frames();
+    const int64_t committed = extracted->committed_frames();
+    if (committed > total_frames) {
+        std::fprintf(
+            stderr, "[identity-handoff] FAIL: committed_frames() %lld exceeds n_frames() %lld\n",
+            static_cast<long long>(committed), static_cast<long long>(total_frames));
+        return 1;
+    }
+    if (committed == total_frames) {
+        std::fprintf(
+            stderr,
+            "[identity-handoff] FAIL: expected a provisional preview tail after "
+            "flush_available(), but committed_frames() == n_frames() == %lld. The fixture "
+            "must end mid-chunk at the split point, or this test cannot detect an offset "
+            "computed from n_frames(). Try a different --split-sec.\n",
+            static_cast<long long>(total_frames));
+        return 1;
+    }
+    std::printf(
+        "[identity-handoff] frames at split: committed=%lld total=%lld (provisional tail=%lld)\n",
+        static_cast<long long>(committed), static_cast<long long>(total_frames),
+        static_cast<long long>(total_frames - committed));
     stream1.reset();
 
     if (words1.empty() || words1.back().speaker_tag <= 0) {
