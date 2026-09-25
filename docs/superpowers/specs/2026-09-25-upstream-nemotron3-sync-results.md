@@ -260,12 +260,47 @@ python tests/integration/http_conformance_test.py \
 correction — parakeet is offline-only and this test exercises the
 realtime WebSocket path.)
 
-**Outcome: exit 0.** Every `require(...)` passed, including line ~423's
-`require(speaker_changes, "WebSocket speaker-change event")` — the gate
-did **not** suppress the event on this 90-second fixture. (`require()`
-raises on failure and the script prints nothing on success, so exit 0
-with no output is the full-pass signal — confirmed by reading the
-script's `require()`/`main()` source.)
+**Outcome: exit 0** (`real 0m16.659s`). Every `require(...)` passed,
+including line ~423's `require(speaker_changes, "WebSocket speaker-change
+event")` — the gate did **not** suppress the event on this 90-second
+fixture. (`require()` raises on failure and the script prints nothing on
+success, so exit 0 with no output is the full-pass signal — confirmed by
+reading the script's `require()`/`main()` source. It also binds a
+`free_port()` rather than 8080, so it does not collide with a running
+`nemo-speech serve`.)
+
+**Re-run instrumented, to replace "exit 0" with the numbers the
+assertions actually compared.** A silent pass records no measurement, so
+the same checks were re-run from an instrumented *copy* of the script
+(scratchpad only; the repo file was never modified — `git status` stayed
+at ` m ggml` throughout) with prints added next to the two assertions
+under test:
+
+```
+INSTR commit-boundary: last word before split speaker=2 first word after split speaker=2
+                       n_completed=2 n_words_before=101 n_words_after=109
+INSTR speaker_changes: n=2 detail=[(2, 7.290999831914902), (3, 81.37099817609787)]
+INSTR final completed: n_words=210 speaker_tags=[1, 2, 3]
+```
+
+- **Lines 399–405, "speaker identity persists across a commit boundary":**
+  the two commits split at 40.0 s of `scotus_08-1314_excerpt.wav` produced
+  2 `.completed` events carrying 101 and 109 tagged words. The last word
+  before the split is **speaker 2** and the first word after it is
+  **speaker 2** — the identity survived the boundary. This is the
+  protocol-level proof of what the divergence-#3 fix changed, with the
+  compared values rather than just the verdict.
+- **Line 423, `require(speaker_changes, ...)`:** **2** events fired —
+  speaker 2 at `start_time=7.291 s` and speaker 3 at
+  `start_time=81.371 s`. Both carry a 1-based int `speaker` and a numeric
+  `start_time`, which is what the follow-on checks at lines 425–432 assert.
+- Final `.completed`: 210 words, speaker tags `{1, 2, 3}` — the
+  `WebSocket speaker tags` check.
+
+Note that this commit-boundary block always runs against the hard-coded
+`scotus_08-1314_excerpt.wav` (resolved from `__file__`), independent of
+`--audio`; `--audio` drives the separate single-stream assertions,
+including line 423's.
 
 **Command 2 (corroboration on a longer multi-speaker clip, per the
 brief's instruction to check this on a longer clip regardless of outcome):**
