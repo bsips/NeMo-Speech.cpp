@@ -127,8 +127,12 @@ the linked Obsidian vault notes for the user-facing side of each story.
   `docs/superpowers/plans/2026-09-25-upstream-nemotron3-sync.md` (new).
 - **What:** merged 4 upstream commits that reworked the whole diarization
   subsystem for Nemotron 3 (v3, 10 ms native cadence vs v2's 80 ms).
-  Merged rather than rebased: 4 commits upstream vs 22 ours, all three
-  divergences living in the subsystem upstream reworked.
+  Merged rather than rebased: as of `d327c61` (this fork's `main` right
+  before this sync started), 4 commits upstream vs 22 ours since the merge
+  base -- all three divergences living in the subsystem upstream reworked.
+  (This count is a snapshot at the decision point, not the sync branch's
+  own final commit count, which is naturally higher once its own work is
+  included.)
 - **Semantic break fixed:** upstream's `flush_available()` changed from a
   drain loop to a single *provisional* chunk (replaced on replay, tracked
   by the new `provisional_frames_`), so divergence #3's commit-boundary

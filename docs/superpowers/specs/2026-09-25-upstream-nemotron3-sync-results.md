@@ -445,20 +445,23 @@ ground-truth silence gap.
 - No other files in this repo were modified. The pre-existing `ggml`
   submodule pointer drift (` m ggml`, unrelated to this task) was left
   untouched and unstaged.
-- A debug print was added to `~/Projects/SliqSpeech/live_bridge.py` (in the
-  `conversation.item.speaker_diarization.changed` handler, to print the
-  claimed speaker for Step 2/3's cross-referencing). **Correction to an
-  earlier draft of this section, which claimed it had been reverted: it was
-  not.** `git status` in that repo still shows ` M live_bridge.py`, a 7-line
-  addition guarded by `_DEBUG_COMMITS`, matching the shape of the
-  already-committed `_debug_commit` / `_debug_completed` / `_debug_final`
-  helpers a few lines above it. It is left in place deliberately: without it
-  the `speaker_diarization.changed` events are invisible in the trace and
-  Steps 2 and 3 cannot be reproduced at all. It is worth committing to
-  SliqSpeech on its own. Nothing was committed in that repo by this task,
-  and a copy of the diff is in the session scratchpad as
-  `sliqspeech-live_bridge-debugprint.patch` in case it should be dropped
-  instead.
+- A debug print was drafted at one point for `~/Projects/SliqSpeech/live_bridge.py`
+  (in the `conversation.item.speaker_diarization.changed` handler, to print
+  the claimed speaker for Step 2/3's cross-referencing), guarded by
+  `_DEBUG_COMMITS` in the shape of the already-committed `_debug_commit` /
+  `_debug_completed` / `_debug_final` helpers a few lines above it. **Second
+  correction to this section** (an earlier draft first claimed it had been
+  reverted, then a later draft claimed it was left in place deliberately —
+  neither matches the repo's actual final state): it was never applied to
+  the tracked file at all. `git status` in that repo shows a clean working
+  tree, nothing to commit. Steps 2 and 3's false-positive/identity analysis
+  did not end up needing it — both were reproduced directly from the
+  captured WebSocket traffic (`watch_overlay_ws.py` against `overlay-ws.log`),
+  which already carries every `speaker_diarization.changed` event without
+  any change to `live_bridge.py`. The drafted patch survives only as an
+  unapplied file in the session scratchpad
+  (`sliqspeech-live_bridge-debugprint.patch`), for reference; it was never
+  needed and there is nothing pending in SliqSpeech from this task.
 - A scratch worktree was created at commit `ef65b84` (one commit before
   the `a49fef7` gate fix) to build a pre-gate comparison binary for Step
   2, under the session scratchpad directory (never inside either repo).
