@@ -148,6 +148,51 @@ test_tracker_empty_segments_never_reported_and_does_not_corrupt_state() {
     return true;
 }
 
+bool
+test_segments_before_keeps_settled_onsets() {
+    // Onsets at 0.0 and 2.0 are both before the frontier at 3.0; the one
+    // at 4.0 is not yet immutable and must be withheld.
+    const std::vector<DiarSegment> segs = {{0.0, 2.0, 0}, {2.0, 5.0, 1}, {4.0, 6.0, 2}};
+    const auto got = segments_before(segs, /*stable_time=*/3.0);
+    if (got.size() != 2 || got[0].speaker != 0 || got[1].speaker != 1) {
+        std::fprintf(
+            stderr, "[FAIL] expected 2 settled segments (speakers 0,1), got %zu\n", got.size());
+        return false;
+    }
+    return true;
+}
+
+bool
+test_segments_before_withholds_everything_at_a_zero_frontier() {
+    // A fresh stream whose frontier has not advanced yet: nothing is
+    // immutable, so nothing may be reported.
+    const std::vector<DiarSegment> segs = {{0.0, 2.0, 0}, {2.0, 5.0, 1}};
+    const auto got = segments_before(segs, /*stable_time=*/0.0);
+    if (!got.empty()) {
+        std::fprintf(
+            stderr, "[FAIL] expected no segments at a zero frontier, got %zu\n", got.size());
+        return false;
+    }
+    return true;
+}
+
+bool
+test_unsettled_change_is_not_reported_through_the_gate() {
+    // The false-positive case the gate exists to kill: speaker 1's segment
+    // starts past the frontier, so the change is not yet confirmable.
+    // Gated, the tracker must still see only speaker 0 and report nothing.
+    const std::vector<DiarSegment> segs = {{0.0, 2.0, 0}, {4.0, 6.0, 1}};
+    const auto gated = segments_before(segs, /*stable_time=*/3.0);
+    const auto got = detect_speaker_change(gated, /*last_reported=*/0);
+    if (got) {
+        std::fprintf(
+            stderr, "[FAIL] expected no change for a segment starting past the frontier, "
+            "got speaker %d at t=%.2f\n", got->speaker, got->start_time);
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 int
@@ -163,12 +208,15 @@ main() {
     ok &= test_tracker_genuine_change_after_baseline_is_reported();
     ok &= test_tracker_second_genuine_change_is_also_reported();
     ok &= test_tracker_empty_segments_never_reported_and_does_not_corrupt_state();
+    ok &= test_segments_before_keeps_settled_onsets();
+    ok &= test_segments_before_withholds_everything_at_a_zero_frontier();
+    ok &= test_unsettled_change_is_not_reported_through_the_gate();
     if (!ok) {
         std::fprintf(stderr, "[FAIL] detect_speaker_change / SpeakerChangeTracker\n");
         return 1;
     }
     std::printf(
-        "[PASS] detect_speaker_change and SpeakerChangeTracker (10 tests) report real speaker "
+        "[PASS] detect_speaker_change and SpeakerChangeTracker (13 tests) report real speaker "
         "transitions only\n");
     return 0;
 }

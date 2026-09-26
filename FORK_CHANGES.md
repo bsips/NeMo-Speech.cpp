@@ -42,6 +42,7 @@ the linked Obsidian vault notes for the user-facing side of each story.
   `NeMoSpeech`'s project notes (see companion link above).
 - **Upstreaming status:** not yet proposed to `NVIDIA/NeMo-Speech.cpp`. This
   fork stays ahead of upstream on this fix until/unless that happens.
+- **Rebased onto:** `97a15af` on 2026-09-25 (see the 2026-09-25 sync entry).
 
 ### 2026-09-13 — Live speaker-change event on the realtime WebSocket
 
@@ -78,6 +79,7 @@ the linked Obsidian vault notes for the user-facing side of each story.
   companion `NeMoSpeech` project (confirmed via md5sum: all committed wavs
   are byte-identical duplicates).
 - **Upstreaming status:** not yet proposed to `NVIDIA/NeMo-Speech.cpp`.
+- **Rebased onto:** `97a15af` on 2026-09-25 (see the 2026-09-25 sync entry).
 
 ### 2026-09-13 — Persistent diarizer identity across realtime commits
 
@@ -109,3 +111,60 @@ the linked Obsidian vault notes for the user-facing side of each story.
   `tests/integration/http_conformance_test.py` proving the same property
   at the WebSocket protocol level across two real commits.
 - **Upstreaming status:** not yet proposed to `NVIDIA/NeMo-Speech.cpp`.
+- **Rebased onto:** `97a15af` on 2026-09-25 (see the 2026-09-25 sync entry).
+
+### 2026-09-25 — Upstream sync onto the Nemotron 3 diarization base
+
+- **Upstream base:** `97a15af` (`main`, "make Nemotron 3 Diarization the
+  default diarizer" #52).
+- **PR:** [bsips/NeMo-Speech.cpp#4](https://github.com/bsips/NeMo-Speech.cpp/pull/4).
+- **Files:** `src/asr/diar/diar_pipeline.{h,cpp}`, `src/asr/recognizer.cpp`,
+  `tests/cpp/asr/CMakeLists.txt`,
+  `tests/cpp/asr/test_diar_identity_handoff.cpp`,
+  `tests/cpp/asr/test_diar_speaker_change.cpp`,
+  `docs/superpowers/specs/2026-09-25-upstream-nemotron3-sync-design.md` (new),
+  `docs/superpowers/specs/2026-09-25-upstream-nemotron3-sync-results.md` (new),
+  `docs/superpowers/plans/2026-09-25-upstream-nemotron3-sync.md` (new).
+- **What:** merged 4 upstream commits that reworked the whole diarization
+  subsystem for Nemotron 3 (v3, 10 ms native cadence vs v2's 80 ms).
+  Merged rather than rebased: as of `d327c61` (this fork's `main` right
+  before this sync started), 4 commits upstream vs 22 ours since the merge
+  base -- all three divergences living in the subsystem upstream reworked.
+  (This count is a snapshot at the decision point, not the sync branch's
+  own final commit count, which is naturally higher once its own work is
+  included.)
+- **Semantic break fixed:** upstream's `flush_available()` changed from a
+  drain loop to a single *provisional* chunk (replaced on replay, tracked
+  by the new `provisional_frames_`), so divergence #3's commit-boundary
+  force-drain stopped draining. The first fix attempt used
+  `committed_frames()` for the handoff offset and was **wrong** -- it read
+  ~1.6s too small, because frame indices are absolute over *fed* audio,
+  not persistently-consumed audio; review caught it. The landed fix adds
+  `DiarStream::fed_audio_sec()` instead and drops the force-drain
+  entirely: `feed_audio()` already persists every whole chunk, and forcing
+  the sub-chunk tail into persistent state would bake truncated right
+  context into the AOSC state the next stream adopts.
+- **Divergence #2 gated:** the speaker-change event is now gated on
+  upstream's new `stable_frames()` frontier via a new `segments_before()`
+  filter. Real-audio measurement (see below) found *more* false positives
+  gated than pre-gate (11/66 = 16.7% vs. 6/71 = 8.5%), the opposite of the
+  expected direction -- but both runs were confounded by differing system
+  load and the sample is small, so this is inconclusive, not evidence the
+  gate is harmful. A controlled re-run under quiet load is still needed
+  before claiming any false-positive improvement.
+- **Superseded by upstream:** our hardcoded 2-frame word anchor in
+  `speaker_for_word_time()` is replaced by upstream's model-derived
+  `word_anchor_frames_`. Ours was a latent bug -- 2 frames is 160 ms at
+  v2's 80 ms cadence but 20 ms at v3's 10 ms cadence.
+- **Still diverged:** divergence #1's `probs_base_` clamp fix remains
+  absent upstream as of `97a15af`, comment claiming the clamp is "inert in
+  practice" included. The 2h39m interview disproves it.
+- **Verified against:** see
+  `docs/superpowers/specs/2026-09-25-upstream-nemotron3-sync-results.md`.
+  Divergences #1 and #3 held up on real audio: the 2h39m interview shows
+  all 16 ten-minute windows multi-speaker with no collapse, and speaker
+  identity stayed continuous across ~100 real commit boundaries.
+  Divergence #2's gate effect was inconclusive, as above. The AMI
+  fixture's handoff test failed at `--split-sec` 20 and 25 (both landing
+  inside a ~7s RTTM truth gap) while passing at 10/15/30/45.
+- **Upstreaming status:** not proposed to `NVIDIA/NeMo-Speech.cpp`.

@@ -13,8 +13,10 @@
 // Usage: test_diar_identity_handoff <asr.gguf> <diar.gguf> <audio.wav> [--gpu N] [--split-sec N]
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -104,6 +106,59 @@ main(int argc, char** argv) {
         std::fprintf(stderr, "[identity-handoff] FAIL: extract_diar_stream() returned null\n");
         return 1;
     }
+
+    // Upstream's forced non-final chunks are previews: they advance
+    // n_frames() but are replaced on replay (provisional_frames_). Take
+    // such a preview deliberately, then confirm committed_frames()
+    // excludes it -- committed_frames() is a correct accessor for the
+    // persistent frontier, but (as the fed_audio_sec() check below
+    // establishes) it is NOT what the adoption offset should be derived
+    // from.
+    extracted->flush_available(std::numeric_limits<int64_t>::max());
+    const int64_t total_frames = extracted->n_frames();
+    const int64_t committed = extracted->committed_frames();
+    if (committed > total_frames) {
+        std::fprintf(
+            stderr, "[identity-handoff] FAIL: committed_frames() %lld exceeds n_frames() %lld\n",
+            static_cast<long long>(committed), static_cast<long long>(total_frames));
+        return 1;
+    }
+    if (committed == total_frames) {
+        std::fprintf(
+            stderr,
+            "[identity-handoff] FAIL: expected a provisional preview tail after "
+            "flush_available(), but committed_frames() == n_frames() == %lld. The fixture "
+            "must end mid-chunk at the split point, or this test cannot detect an offset "
+            "computed from n_frames(). Try a different --split-sec.\n",
+            static_cast<long long>(total_frames));
+        return 1;
+    }
+    std::printf(
+        "[identity-handoff] frames at split: committed=%lld total=%lld (provisional tail=%lld)\n",
+        static_cast<long long>(committed), static_cast<long long>(total_frames),
+        static_cast<long long>(total_frames - committed));
+
+    // The adoption offset must track audio actually fed, not any
+    // persistently-committed subset of it -- frame indices are absolute
+    // over fed audio, so an offset derived from committed_frames() (which
+    // excludes the unconsumed tail) would resolve every word in the
+    // adopting stream too early, into the previous turn at a commit
+    // boundary. Confirm fed_audio_sec() tracks the split point itself,
+    // independent of chunk/right-context geometry.
+    const double fed_sec = extracted->fed_audio_sec();
+    const double frame_sec = extracted->seconds_per_frame();
+    if (std::fabs(fed_sec - split_sec) > frame_sec) {
+        std::fprintf(
+            stderr,
+            "[identity-handoff] FAIL: fed_audio_sec() %.4f is more than one frame (%.4f) away "
+            "from split_sec %.4f -- the handoff offset would not track fed audio\n",
+            fed_sec, frame_sec, split_sec);
+        return 1;
+    }
+    std::printf(
+        "[identity-handoff] timeline at split: fed_audio_sec=%.4f split_sec=%.4f "
+        "(seconds_per_frame=%.4f)\n",
+        fed_sec, split_sec, frame_sec);
     stream1.reset();
 
     if (words1.empty() || words1.back().speaker_tag <= 0) {
