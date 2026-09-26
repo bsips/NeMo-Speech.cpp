@@ -110,10 +110,10 @@ main(int argc, char** argv) {
     // Upstream's forced non-final chunks are previews: they advance
     // n_frames() but are replaced on replay (provisional_frames_). Take
     // such a preview deliberately, then confirm committed_frames()
-    // excludes it. The next stream's adoption offset must derive from the
-    // committed frontier -- an offset read off n_frames() would overshoot
-    // by the preview tail and desync the adopted diarizer's clock against
-    // stream 2's word times.
+    // excludes it -- committed_frames() is a correct accessor for the
+    // persistent frontier, but (as the fed_audio_sec() check below
+    // establishes) it is NOT what the adoption offset should be derived
+    // from.
     extracted->flush_available(std::numeric_limits<int64_t>::max());
     const int64_t total_frames = extracted->n_frames();
     const int64_t committed = extracted->committed_frames();
