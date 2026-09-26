@@ -117,7 +117,7 @@ the linked Obsidian vault notes for the user-facing side of each story.
 
 - **Upstream base:** `97a15af` (`main`, "make Nemotron 3 Diarization the
   default diarizer" #52).
-- **PR:** not yet opened.
+- **PR:** [bsips/NeMo-Speech.cpp#4](https://github.com/bsips/NeMo-Speech.cpp/pull/4).
 - **Files:** `src/asr/diar/diar_pipeline.{h,cpp}`, `src/asr/recognizer.cpp`,
   `tests/cpp/asr/CMakeLists.txt`,
   `tests/cpp/asr/test_diar_identity_handoff.cpp`,
